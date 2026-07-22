@@ -796,33 +796,58 @@ def build_workbook(summary_df: pd.DataFrame, marketplace_results: dict, run_meta
 
 st.set_page_config(page_title="Stock Validation Dashboard", page_icon="📦", layout="wide")
 
+ACCOUNTS = ["DBC", "EWG", "IEI"]
+MARKETPLACES_UI = ["Lazada", "Shopee", "TikTok", "Zalora"]
+
+# Which reference files each account uses. EWG has no Warehouse SOH.
+ACCOUNT_REFERENCE_FILES = {
+    "IEI": ["Product Master", "SOH Report", "ALL Report"],
+    "DBC": ["Product Master", "SOH Report", "ALL Report"],
+    "EWG": ["Product Master", "ALL Report"],
+}
+
+MKT_STOCK_LABEL = {
+    "Lazada": "Lazada Price & Stock Report",
+    "Shopee": "Shopee Mass Update Report",
+    "TikTok": "TikTok Batch Edit Report",
+    "Zalora": "Zalora Stock Report",
+}
+MKT_SV_LABEL = {
+    "Lazada": "Lazada Stock Validation Report",
+    "Shopee": "Shopee Stock Validation Report",
+    "TikTok": "TikTok Stock Validation Report",
+    "Zalora": "Zalora Stock Validation Report",
+}
+ACCOUNT_NOTES = {
+    "IEI": "Uses SOH + Product Master/ALL Report as an optional cross-check. "
+    "Expected Stock always comes from each marketplace's own Stock Validation Report.",
+    "DBC": "Same file logic as IEI. (Listing-status recommendations, e.g. "
+    "TikTok-driven Active/Inactive, aren't produced by this dashboard -- it's stock-only.)",
+    "EWG": "No Warehouse SOH for this account -- Expected Stock is cross-checked "
+    "against the Product Master / ALL Report instead.",
+}
+
 
 # --------------------------------------------------------------------------- #
-# Sidebar: uploads
+# Sidebar: account selector + run controls
 # --------------------------------------------------------------------------- #
 
 st.sidebar.title("📦 Stock Validation")
-st.sidebar.caption(
-    "Upload any subset of your reports below. Files are matched automatically by "
-    "filename -- you don't need to sort them yourself."
-)
 
-uploaded = st.sidebar.file_uploader(
-    "Drop all report files here",
-    accept_multiple_files=True,
-    type=["csv", "xlsx", "xls"],
-)
+account = st.sidebar.selectbox("Account", ACCOUNTS, index=0, key="account_select")
+st.sidebar.caption(ACCOUNT_NOTES[account])
+
+st.sidebar.divider()
 
 flag_max_zero = st.sidebar.checkbox(
     "Flag REMOVE MAX (Max Stock = 0 while real stock exists)",
-    value=False,
-    help="Off by default. When on, rows where the StockValidation file's 'Max Stock' "
-    "column is 0 but Expected or Marketplace stock is > 0 get a REMOVE MAX remark "
-    "instead of the usual mismatch remark -- this catches listing caps silently "
-    "blocking sales.",
+    value=(account == "EWG"),
+    help="Rows where the Stock Validation Report's 'Max Stock' column is 0 but "
+    "Expected or Marketplace stock is > 0 get a REMOVE MAX remark instead of the "
+    "usual mismatch remark -- this catches listing caps silently blocking sales.",
 )
 
-run_clicked = st.sidebar.button("▶ Run Validation", type="primary", use_container_width=True)
+run_clicked = st.sidebar.button("▶ Run Validation", type="primary", width='stretch')
 
 
 # --------------------------------------------------------------------------- #
@@ -831,83 +856,85 @@ run_clicked = st.sidebar.button("▶ Run Validation", type="primary", use_contai
 
 st.title("📦 Stock Validation Dashboard")
 st.caption(
-    "Reconciles Expected Stock against live marketplace stock for Lazada, Shopee, "
-    "TikTok, and Zalora, flags mismatches, and exports a formatted Excel workbook."
+    f"Account: **{account}** -- reconciles Expected Stock against live marketplace "
+    "stock for Lazada, Shopee, TikTok, and Zalora, flags mismatches, and exports a "
+    "formatted Excel workbook."
 )
 
-if not uploaded:
-    st.info("👈 Upload your report files in the sidebar to get started.")
-    with st.expander("What files does this app recognise?"):
-        st.markdown(
-            """
-| File | Detected from filename containing |
-|---|---|
-| Product Master | `product master` |
-| ALL Report | filename starting with `ALL` |
-| SOH Report | `soh` |
-| Lazada Price & Stock Report | `pricestock` |
-| Shopee Mass Update Report | `mass_update_sales_info` |
-| TikTok Batch Edit Report | `batchedit` (ACTIVE + INACTIVE files auto-merged) |
-| Zalora Stock Report | `sellerstocktemplate` |
-| Lazada Stock Validation Report | `stockvalidation` + `lazada` |
-| Shopee Stock Validation Report | `stockvalidation` + `shopee` |
-| TikTok Stock Validation Report | `stockvalidation` + `tiktok` |
-| Zalora Stock Validation Report | `stockvalidation` + `zalora` |
-            """
-        )
-    st.stop()
+st.subheader(f"1. Upload files for {account}")
+
+# --- Reference files ---
+ref_categories = ACCOUNT_REFERENCE_FILES[account]
+with st.expander("Reference Files (optional)", expanded=True):
+    ref_cols = st.columns(len(ref_categories))
+    ref_uploads = {}
+    for col, label in zip(ref_cols, ref_categories):
+        with col:
+            ref_uploads[label] = st.file_uploader(
+                label, type=["csv", "xlsx", "xls"], key=f"ref_{label}"
+            )
+
+# --- Per-marketplace files ---
+st.markdown("**Marketplace Files**")
+mkt_stock_uploads = {}
+mkt_sv_uploads = {}
+mkt_extra_uploads = {}  # Zalora status template, kept optional
+
+for mkt in MARKETPLACES_UI:
+    with st.expander(mkt, expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            multi = mkt in ("Shopee", "TikTok")
+            help_txt = None
+            if mkt == "Shopee":
+                help_txt = "Upload the main export. If you also have a separate _DELIST export, add both here."
+            elif mkt == "TikTok":
+                help_txt = "Upload one combined export, or both ACTIVE + INACTIVE files if yours are split."
+            mkt_stock_uploads[mkt] = st.file_uploader(
+                MKT_STOCK_LABEL[mkt],
+                type=["csv", "xlsx", "xls"],
+                accept_multiple_files=multi,
+                help=help_txt,
+                key=f"mktstock_{mkt}",
+            )
+        with c2:
+            mkt_sv_uploads[mkt] = st.file_uploader(
+                MKT_SV_LABEL[mkt], type=["csv"], key=f"sv_{mkt}"
+            )
+        if mkt == "Zalora":
+            mkt_extra_uploads["Zalora_status"] = st.file_uploader(
+                "Zalora Status Template (optional)",
+                type=["csv", "xlsx", "xls"],
+                key="zalora_status",
+            )
 
 
-# --------------------------------------------------------------------------- #
-# Detection + confirmation table
-# --------------------------------------------------------------------------- #
+def _has_file(x) -> bool:
+    if x is None:
+        return False
+    if isinstance(x, list):
+        return len(x) > 0
+    return True
 
-detected: DetectedFiles = detect_files(uploaded)
 
-st.subheader("1. Detected files")
-summary_rows = detected.as_summary_rows()
-if summary_rows:
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-else:
-    st.warning("No recognised files yet -- check filenames against the table above.")
-
-if detected.unrecognised:
-    with st.expander(f"⚠️ {len(detected.unrecognised)} file(s) not recognised"):
-        for f in detected.unrecognised:
-            st.write(f"- `{f.name}`")
-        st.caption(
-            "These were not matched to any known report type by filename and were "
-            "ignored. Rename them to include a recognisable keyword (see the table "
-            "in the empty-state above) and re-upload if they should be included."
-        )
-
-marketplaces_ready = []
-for mkt, sv_attr, mkt_attr in [
-    ("Lazada", "sv_lazada", "mkt_lazada"),
-    ("Shopee", "sv_shopee", "mkt_shopee"),
-    ("TikTok", "sv_tiktok", "mkt_tiktok"),
-    ("Zalora", "sv_zalora", "mkt_zalora"),
-]:
-    sv_file = getattr(detected, sv_attr)
-    mkt_file = getattr(detected, mkt_attr)
-    has_mkt = bool(mkt_file) if isinstance(mkt_file, list) else mkt_file is not None
-    if sv_file is not None and has_mkt:
-        marketplaces_ready.append(mkt)
+marketplaces_ready = [
+    mkt for mkt in MARKETPLACES_UI
+    if _has_file(mkt_stock_uploads.get(mkt)) and _has_file(mkt_sv_uploads.get(mkt))
+]
 
 if marketplaces_ready:
     st.success(f"Ready to validate: **{', '.join(marketplaces_ready)}**")
 else:
-    st.warning(
-        "No marketplace has both a Stock Validation Report and its matching stock "
-        "file yet -- upload both files for at least one marketplace to run validation."
+    st.info(
+        "Upload both the stock file and the Stock Validation Report for at least "
+        "one marketplace above, then click **▶ Run Validation** in the sidebar."
     )
 
 if not run_clicked:
-    st.caption("Set your options in the sidebar, then click **▶ Run Validation**.")
     st.stop()
 
 if not marketplaces_ready:
-    st.error("Can't run validation yet -- see the warning above.")
+    st.error("Can't run validation yet -- see the notice above.")
     st.stop()
 
 
@@ -919,21 +946,12 @@ with st.spinner("Reading files and validating stock..."):
     errors = []
     reference_frames = []
 
-    if detected.product_master is not None:
-        try:
-            reference_frames.append(readers.read_reference_file(detected.product_master))
-        except Exception as e:
-            errors.append(f"Product Master: {e}")
-    if detected.all_report is not None:
-        try:
-            reference_frames.append(readers.read_reference_file(detected.all_report))
-        except Exception as e:
-            errors.append(f"ALL Report: {e}")
-    if detected.soh_report is not None:
-        try:
-            reference_frames.append(readers.read_reference_file(detected.soh_report))
-        except Exception as e:
-            errors.append(f"SOH Report: {e}")
+    for label, f in ref_uploads.items():
+        if f is not None:
+            try:
+                reference_frames.append(read_reference_file(f))
+            except Exception as e:
+                errors.append(f"{label}: {e}")
 
     reference_df = (
         pd.concat(reference_frames, ignore_index=True).drop_duplicates(subset="SKU")
@@ -947,43 +965,50 @@ with st.spinner("Reading files and validating stock..."):
     # Lazada
     if "Lazada" in marketplaces_ready:
         try:
-            sv = readers.read_stock_validation_csv(detected.sv_lazada)
-            mkt = readers.read_lazada_pricestock(detected.mkt_lazada)
-            cross_checks["Lazada"] = validation.cross_check_reference(sv, reference_df)
-            results["Lazada"] = validation.validate_marketplace("Lazada", sv, mkt, flag_max_zero)
+            sv = read_stock_validation_csv(mkt_sv_uploads["Lazada"])
+            mkt_df = read_lazada_pricestock(mkt_stock_uploads["Lazada"])
+            cross_checks["Lazada"] = cross_check_reference(sv, reference_df)
+            results["Lazada"] = validate_marketplace("Lazada", sv, mkt_df, flag_max_zero)
         except Exception as e:
             errors.append(f"Lazada: {e}")
 
-    # Shopee
+    # Shopee (may have 1 or 2 files: full export + optional _DELIST export)
     if "Shopee" in marketplaces_ready:
         try:
-            sv = readers.read_stock_validation_csv(detected.sv_shopee)
-            mkt = readers.read_shopee_mass_update(detected.mkt_shopee)
-            if detected.sv_shopee_delist is not None:
-                delist_skus = readers.read_shopee_delist(detected.sv_shopee_delist)
-                mkt = validation.apply_shopee_delist(mkt, delist_skus)
-            cross_checks["Shopee"] = validation.cross_check_reference(sv, reference_df)
-            results["Shopee"] = validation.validate_marketplace("Shopee", sv, mkt, flag_max_zero)
+            shopee_files = mkt_stock_uploads["Shopee"]
+            shopee_files = shopee_files if isinstance(shopee_files, list) else [shopee_files]
+            delist_file = next((f for f in shopee_files if "delist" in f.name.lower()), None)
+            full_file = next((f for f in shopee_files if f is not delist_file), shopee_files[0])
+
+            sv = read_stock_validation_csv(mkt_sv_uploads["Shopee"])
+            mkt_df = read_shopee_mass_update(full_file)
+            if delist_file is not None:
+                delist_skus = read_shopee_delist(delist_file)
+                mkt_df = apply_shopee_delist(mkt_df, delist_skus)
+            cross_checks["Shopee"] = cross_check_reference(sv, reference_df)
+            results["Shopee"] = validate_marketplace("Shopee", sv, mkt_df, flag_max_zero)
         except Exception as e:
             errors.append(f"Shopee: {e}")
 
-    # TikTok
+    # TikTok (may have 1 combined file, or 2: ACTIVE + INACTIVE)
     if "TikTok" in marketplaces_ready:
         try:
-            sv = readers.read_stock_validation_csv(detected.sv_tiktok)
-            mkt = readers.read_tiktok_batchedit(detected.mkt_tiktok)
-            cross_checks["TikTok"] = validation.cross_check_reference(sv, reference_df)
-            results["TikTok"] = validation.validate_marketplace("TikTok", sv, mkt, flag_max_zero)
+            tiktok_files = mkt_stock_uploads["TikTok"]
+            tiktok_files = tiktok_files if isinstance(tiktok_files, list) else [tiktok_files]
+            sv = read_stock_validation_csv(mkt_sv_uploads["TikTok"])
+            mkt_df = read_tiktok_batchedit(tiktok_files)
+            cross_checks["TikTok"] = cross_check_reference(sv, reference_df)
+            results["TikTok"] = validate_marketplace("TikTok", sv, mkt_df, flag_max_zero)
         except Exception as e:
             errors.append(f"TikTok: {e}")
 
     # Zalora
     if "Zalora" in marketplaces_ready:
         try:
-            sv = readers.read_stock_validation_csv(detected.sv_zalora)
-            mkt = readers.read_zalora_stock(detected.mkt_zalora, detected.mkt_zalora_status)
-            cross_checks["Zalora"] = validation.cross_check_reference(sv, reference_df)
-            results["Zalora"] = validation.validate_marketplace("Zalora", sv, mkt, flag_max_zero)
+            sv = read_stock_validation_csv(mkt_sv_uploads["Zalora"])
+            mkt_df = read_zalora_stock(mkt_stock_uploads["Zalora"], mkt_extra_uploads.get("Zalora_status"))
+            cross_checks["Zalora"] = cross_check_reference(sv, reference_df)
+            results["Zalora"] = validate_marketplace("Zalora", sv, mkt_df, flag_max_zero)
         except Exception as e:
             errors.append(f"Zalora: {e}")
 
@@ -995,7 +1020,7 @@ if errors:
 if not results:
     st.stop()
 
-summary_df = validation.summarize(results)
+summary_df = summarize(results)
 
 # --------------------------------------------------------------------------- #
 # Dashboard
@@ -1024,7 +1049,7 @@ if reference_frames:
                     f"in the uploaded reference file(s) ({cc['match_rate']*100:.1f}%)."
                 )
 
-st.dataframe(summary_df, use_container_width=True, hide_index=True)
+st.dataframe(summary_df, width='stretch', hide_index=True)
 
 if not summary_df.empty:
     chart_df = summary_df.set_index("Marketplace")[
@@ -1034,10 +1059,11 @@ if not summary_df.empty:
 
 
 # --------------------------------------------------------------------------- #
-# Per-marketplace detail tabs
+# Per-marketplace detail tabs (doubles as the Mismatch Report -- filter to any
+# non-GOOD remark to see just the mismatches)
 # --------------------------------------------------------------------------- #
 
-st.subheader("3. Marketplace detail")
+st.subheader("3. Marketplace detail & mismatch report")
 
 
 def _style_remark(val: str) -> str:
@@ -1060,7 +1086,7 @@ for tab, mkt in zip(tabs, results.keys()):
         view_df = df[df["Remark"].isin(remark_filter)] if remark_filter else df
         display_cols = [c for c in view_df.columns if c != "Marketplace"]
         styled = view_df[display_cols].style.map(_style_remark, subset=["Remark"])
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(styled, width='stretch', hide_index=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -1070,17 +1096,18 @@ for tab, mkt in zip(tabs, results.keys()):
 st.subheader("4. Export")
 
 run_meta = {
+    "Account": account,
     "Generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
     "Marketplaces": ", ".join(results.keys()),
     "REMOVE MAX flagging": "On" if flag_max_zero else "Off",
 }
-workbook_bytes = excel_export.build_workbook(summary_df, results, run_meta)
+workbook_bytes = build_workbook(summary_df, results, run_meta)
 
 st.download_button(
     label="⬇ Download Excel workbook",
     data=workbook_bytes,
-    file_name=f"Stock_Validation_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+    file_name=f"{account}_Stock_Validation_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     type="primary",
-    use_container_width=True,
+    width='stretch',
 )
