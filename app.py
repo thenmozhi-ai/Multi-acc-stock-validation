@@ -5,13 +5,51 @@ Streamlit entrypoint. See README.md for the full file list this app understands.
 from __future__ import annotations
 
 import datetime as dt
+import os
+import sys
+
+# --------------------------------------------------------------------------- #
+# Make sure this app's own directory is on sys.path, regardless of what
+# working directory Streamlit Cloud (or any other host) launches from.
+# This is what fixes "ModuleNotFoundError: No module named 'src'".
+# --------------------------------------------------------------------------- #
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
 
 import pandas as pd
 import streamlit as st
 
-from src import excel_export, readers, validation
-from src.constants import CATEGORY_LABELS, MARKETPLACES, REMARK_STREAMLIT_COLORS
-from src.file_detection import DetectedFiles, detect_files
+try:
+    from src import excel_export, readers, validation
+    from src.constants import CATEGORY_LABELS, MARKETPLACES, REMARK_STREAMLIT_COLORS
+    from src.file_detection import DetectedFiles, detect_files
+except ModuleNotFoundError as e:
+    st.error(
+        "Could not import the `src` package. This almost always means the `src/` "
+        "folder (with its 5 .py files, including `__init__.py`) wasn't fully pushed "
+        "to your GitHub repo, or your Streamlit Cloud app's 'Main file path' isn't "
+        "pointing at this app.py's own repo root.\n\n"
+        f"Underlying error: `{e}`\n\n"
+        "**Check on GitHub.com** that your repo has this exact layout:\n\n"
+        "```\n"
+        "your-repo/\n"
+        "├── app.py\n"
+        "├── requirements.txt\n"
+        "└── src/\n"
+        "    ├── __init__.py\n"
+        "    ├── constants.py\n"
+        "    ├── file_detection.py\n"
+        "    ├── readers.py\n"
+        "    ├── validation.py\n"
+        "    └── excel_export.py\n"
+        "```\n\n"
+        "If `src/` is missing or any file inside it shows 0 files when you open the "
+        "folder on GitHub, re-upload that folder (drag-and-drop uploads sometimes "
+        "silently skip empty or nested files) and reboot the app from "
+        "**Manage app → Reboot**."
+    )
+    st.stop()
 
 st.set_page_config(page_title="Stock Validation Dashboard", page_icon="📦", layout="wide")
 
